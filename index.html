@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Interaktywna Mapa Polski - Ceny</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        #map { height: 100vh; width: 100%; background: #f0f2f5; }
+        .panel {
+            position: absolute; top: 15px; right: 15px; z-index: 1000;
+            background: white; padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 260px;
+        }
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.8); z-index: 9999;
+            display: none; justify-content: center; align-items: center; font-weight: bold;
+        }
+        .legend { background: white; padding: 10px; border-radius: 5px; line-height: 18px; box-shadow: 0 0 5px rgba(0,0,0,0.2); }
+        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+        #back-btn { 
+            display: none; width: 100%; margin-top: 10px; padding: 10px; 
+            background: #2c3e50; color: white; border: none; border-radius: 5px; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loader" class="loading-overlay">Pobieranie danych mapy... Proszę czekać.</div>
+
+<div class="panel">
+    <div id="path" style="font-size: 11px; color: #3498db; font-weight: bold;">POLSKA</div>
+    <h2 id="region-name" style="margin: 5px 0 10px 0; font-size: 18px;">Wskaż region</h2>
+    <div id="price-val" style="font-size: 24px; font-weight: bold; color: #e74c3c;">--</div>
+    <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">PLN za m²</div>
+    <div id="legend" class="legend"></div>
+    <button id="back-btn">← WRÓĆ POZIOM WYŻEJ</button>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map').setView([52.0, 19.0], 6);
+    let currentLayer;
+    let currentLevel = 'woj';
+    let history = []; 
+    let geoCache = {};
+
+    // Używamy CDN jsDelivr dla lepszej stabilności i braku problemów CORS
+    const GEO_URLS = {
+        woj: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/wojewodztwa/wojewodztwa-low.geojson',
+        pow: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/powiaty/powiaty-low.geojson',
+        gmi: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/gminy/gminy-low.geojson'
+    };
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+    function getPrice(terc) {
+        let seed = parseInt(terc) || 100;
+        return Math.floor(6000 + (Math.abs(Math.sin(seed)) * 9000));
+    }
+
+    function getColor(d) {
+        return d > 13000 ? '#800026' : d > 11000 ? '#BD0026' : d > 9000 ? '#E31A1C' :
+               d > 8000  ? '#FC4E2A' : d > 7000  ? '#FD8D3C' : '#FEB24C';
+    }
+
+    async function loadData(level, filterCode = '') {
+        const loader = document.getElementById('loader');
+        loader.style.display = 'flex';
+
+        try {
+            let data;
+            if (geoCache[level]) {
+                data = geoCache[level];
+            } else {
+                console.log("Próba pobrania: " + GEO_URLS[level]);
+                const response = await fetch(GEO_URLS[level]);
+                if (!response.ok) throw new Error(`Błąd sieci: ${response.status}`);
+                data = await response.json();
+                geoCache[level] = data;
+            }
+
+            if (currentLayer) map.removeLayer(currentLayer);
+
+            currentLayer = L.geoJson(data, {
+                filter: f => level === 'woj' ? true : f.properties.terc.startsWith(filterCode),
+                style: f => ({
+                    fillColor: getColor(getPrice(f.properties.terc)),
+                    weight: 1, color: 'white', fillOpacity: 0.7
+                }),
+                onEachFeature: (f, layer) => {
+                    layer.on({
+                        mouseover: e => {
+                            const p = f.properties;
+                            document.getElementById('region-name').innerText = p.nazwa;
+                            document.getElementById('price-val').innerText = getPrice(p.terc).toLocaleString();
+                            e.target.setStyle({ weight: 3, color: '#333', fillOpacity: 0.9 });
+                        },
+                        mouseout: e => currentLayer.resetStyle(e.target),
+                        click: e => {
+                            if (level === 'woj') drillDown('pow', f.properties.terc, f.properties.nazwa, e.target.getBounds());
+                            else if (level === 'pow') drillDown('gmi', f.properties.terc, f.properties.nazwa, e.target.getBounds());
+                        }
+                    });
+                }
+            }).addTo(map);
+
+        } catch (err) {
+            console.error("Błąd ładowania:", err);
+            alert("Błąd: Nie można pobrać danych mapy. \n\n1. Otwórz plik przez lokalny serwer (np. VS Code Live Server).\n2. Sprawdź konsolę F12.");
+        } finally {
+            loader.style.display = 'none';
+        }
+    }
+
+    function drillDown(nextLevel, terc, name, bounds) {
+        history.push({ level: currentLevel, terc: terc.substring(0, terc.length - 2), center: map.getCenter(), zoom: map.getZoom() });
+        currentLevel = nextLevel;
+        document.getElementById('back-btn').style.display = 'block';
+        document.getElementById('path').innerText += " > " + name.toUpperCase();
+        map.fitBounds(bounds);
+        loadData(nextLevel, terc);
+    }
+
+    document.getElementById('back-btn').onclick = () => {
+        const prev = history.pop();
+        if (!prev) return;
+        
+        currentLevel = prev.level;
+        if (history.length === 0) {
+            document.getElementById('back-btn').style.display = 'none';
+            document.getElementById('path').innerText = "POLSKA";
+            map.setView([52.0, 19.0], 6);
+        } else {
+            let parts = document.getElementById('path').innerText.split(" > ");
+            parts.pop();
+            document.getElementById('path').innerText = parts.join(" > ");
+        }
+        loadData(currentLevel, prev.terc);
+    };
+
+    // Legenda
+    const legend = document.getElementById('legend');
+    const grades = [0, 7000, 8000, 9000, 11000, 13000];
+    grades.forEach((g, i) => {
+        legend.innerHTML += `<i style="background:${getColor(g + 1)}"></i> ${g}${grades[i+1] ? '&ndash;'+grades[i+1] : '+'}<br>`;
+    });
+
+    loadData('woj');
+</script>
+</body>
+</html>
