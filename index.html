@@ -3,98 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mapa Nieruchomości Polska</title>
+    <title>Interaktywna Mapa Polski</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; font-family: sans-serif; background: #f4f4f4; }
+        body { margin: 0; font-family: 'Segoe UI', Arial, sans-serif; background: #eceff1; }
         #map { height: 100vh; width: 100%; }
         
         .panel {
-            position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: white; padding: 15px; border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2); width: 240px;
+            position: absolute; top: 15px; right: 15px; z-index: 1000;
+            background: white; padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 25px rgba(0,0,0,0.2); width: 280px;
         }
 
         #loader {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255,255,255,0.8); z-index: 9999;
-            justify-content: center; align-items: center; flex-direction: column;
+            background: rgba(255,255,255,0.9); z-index: 9999;
+            flex-direction: column; justify-content: center; align-items: center;
         }
 
         .spinner {
-            width: 40px; height: 40px; border: 4px solid #ddd;
-            border-top: 4px solid #3498db; border-radius: 50%;
+            width: 50px; height: 50px; border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db; border-radius: 50%;
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+        .legend { background: white; padding: 10px; border-radius: 8px; line-height: 20px; font-size: 13px; margin-top: 15px; border: 1px solid #ddd; }
+        .legend i { width: 18px; height: 18px; float: left; margin-right: 10px; opacity: 0.8; border-radius: 3px; }
+        
         #back-btn { 
-            display: none; width: 100%; margin-top: 10px; padding: 8px;
-            background: #333; color: white; border: none; cursor: pointer; border-radius: 4px;
+            display: none; width: 100%; margin-top: 15px; padding: 12px;
+            background: #2c3e50; color: white; border: none; cursor: pointer; 
+            border-radius: 8px; font-weight: bold; font-size: 14px;
         }
+        #back-btn:hover { background: #1a252f; }
+        
+        .breadcrumb { font-size: 10px; color: #3498db; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
 <div id="loader">
     <div class="spinner"></div>
-    <p id="loader-text">Pobieranie danych...</p>
+    <p id="loader-text" style="margin-top:15px; font-weight:bold; color:#34495e;">Ładowanie danych geograficznych...</p>
 </div>
 
 <div class="panel">
-    <div id="path" style="font-size: 10px; color: gray;">POLSKA</div>
-    <h3 id="region-name" style="margin: 5px 0;">Województwa</h3>
-    <div style="font-size: 20px; font-weight: bold; color: #e74c3c;" id="price-display">-- <span style="font-size: 12px; color: #666;">PLN/m²</span></div>
-    <div id="legend" style="margin-top:10px; font-size: 12px; line-height: 18px;"></div>
-    <button id="back-btn">← Wróć wyżej</button>
+    <div id="path" class="breadcrumb">POLSKA</div>
+    <h2 id="region-name" style="margin: 0; font-size: 20px;">Województwa</h2>
+    <div style="margin: 15px 0;">
+        <span id="price-display" style="font-size: 28px; font-weight: bold; color: #e74c3c;">--</span>
+        <span style="color: #7f8c8d; font-weight: bold;"> PLN/m²</span>
+    </div>
+    <div id="legend" class="legend"></div>
+    <button id="back-btn">← WRÓĆ POZIOM WYŻEJ</button>
 </div>
 
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    const map = L.map('map').setView([52.0, 19.0], 6);
+    // Inicjalizacja mapy
+    const map = L.map('map', { zoomSnap: 0.5 }).setView([52.0, 19.0], 6.5);
     let currentLayer;
     let currentLevel = 'woj';
     let cache = {};
     let history = [];
 
-    // Używamy bezpośrednich linków do Raw GitHub z dodatkowym parametrem, aby uniknąć agresywnego cache'owania
-    const BASE_URL = "https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/";
+    // Używamy stabilnego CDN jsDelivr zamiast raw.githubusercontent
     const URLS = {
-        woj: BASE_URL + "wojewodztwa/wojewodztwa-low.geojson",
-        pow: BASE_URL + "powiaty/powiaty-low.geojson",
-        gmi: BASE_URL + "gminy/gminy-low.geojson"
+        woj: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/wojewodztwa/wojewodztwa-low.geojson',
+        pow: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/powiaty/powiaty-low.geojson',
+        gmi: 'https://cdn.jsdelivr.net/gh/ppatrzyk/polska-geojson@master/gminy/gminy-low.geojson'
     };
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
 
     function getPrice(terc) {
         if (!terc) return 5000;
         let s = parseInt(terc);
-        return Math.floor(6000 + (Math.abs(Math.sin(s)) * 8000));
+        return Math.floor(6500 + (Math.abs(Math.sin(s)) * 8500));
     }
 
     function getColor(d) {
-        return d > 12000 ? '#800026' : d > 10000 ? '#BD0026' : d > 9000 ? '#E31A1C' :
-               d > 8000 ? '#FC4E2A' : d > 7000 ? '#FD8D3C' : '#FEB24C';
+        return d > 12500 ? '#800026' : d > 10500 ? '#BD0026' : d > 9000  ? '#E31A1C' :
+               d > 8000  ? '#FC4E2A' : d > 7000  ? '#FD8D3C' : '#FEB24C';
     }
 
-    async function loadLayer(level, filterTerc = '') {
+    async function loadData(level, filterTerc = '') {
         const loader = document.getElementById('loader');
         const loaderText = document.getElementById('loader-text');
         loader.style.display = 'flex';
-        loaderText.innerText = `Wczytywanie: ${level === 'gmi' ? 'Gminy (duży plik)' : level.toUpperCase()}`;
+        loaderText.innerText = `Pobieranie: ${level === 'gmi' ? 'Gminy (ok. 11MB - poczekaj)' : level.toUpperCase()}`;
 
         try {
             let data;
             if (cache[level]) {
                 data = cache[level];
             } else {
-                console.log("Pobieranie z: " + URLS[level]);
+                console.log("Fetching from CDN: " + URLS[level]);
                 const response = await fetch(URLS[level]);
-                if (!response.ok) throw new Error("Status: " + response.status);
+                if (!response.ok) throw new Error("HTTP " + response.status);
                 data = await response.json();
                 cache[level] = data;
             }
@@ -112,8 +123,8 @@
                         mouseover: e => {
                             const p = f.properties;
                             document.getElementById('region-name').innerText = p.nazwa;
-                            document.getElementById('price-display').innerHTML = getPrice(p.terc).toLocaleString() + ' <span style="font-size: 12px; color: #666;">PLN/m²</span>';
-                            e.target.setStyle({ weight: 3, color: '#666', fillOpacity: 0.9 });
+                            document.getElementById('price-display').innerText = getPrice(p.terc).toLocaleString();
+                            e.target.setStyle({ weight: 3, color: '#444', fillOpacity: 0.9 });
                         },
                         mouseout: e => currentLayer.resetStyle(e.target),
                         click: e => {
@@ -122,15 +133,15 @@
                                 history.push({ level: 'woj', filter: '', path: 'POLSKA' });
                                 currentLevel = 'pow';
                                 document.getElementById('back-btn').style.display = 'block';
-                                document.getElementById('path').innerText = "POLSKA > " + p.nazwa.toUpperCase();
+                                document.getElementById('path').innerText = "POLSKA > " + p.nazwa;
                                 map.fitBounds(e.target.getBounds());
-                                loadLayer('pow', p.terc);
+                                loadData('pow', p.terc);
                             } else if (level === 'pow') {
                                 history.push({ level: 'pow', filter: p.terc.substring(0, 2), path: document.getElementById('path').innerText });
                                 currentLevel = 'gmi';
-                                document.getElementById('path').innerText += " > " + p.nazwa.toUpperCase();
+                                document.getElementById('path').innerText += " > " + p.nazwa;
                                 map.fitBounds(e.target.getBounds());
-                                loadLayer('gmi', p.terc);
+                                loadData('gmi', p.terc);
                             }
                         }
                     });
@@ -138,35 +149,36 @@
             }).addTo(map);
 
         } catch (err) {
-            console.error("BŁĄD:", err);
-            alert("Błąd połączenia z danymi mapy. Sprawdź konsolę F12.");
+            console.error("Błąd krytyczny:", err);
+            alert("Nie udało się załadować mapy. Szczegóły błędu w konsoli (F12). Spróbuj odświeżyć stronę przyciskiem Ctrl+F5.");
         } finally {
             loader.style.display = 'none';
         }
     }
 
     document.getElementById('back-btn').onclick = () => {
-        const prev = history.pop();
-        if (!prev) return;
-        currentLevel = prev.level;
-        document.getElementById('path').innerText = prev.path;
+        const last = history.pop();
+        if (!last) return;
+        currentLevel = last.level;
+        document.getElementById('path').innerText = last.path;
         if (currentLevel === 'woj') {
             document.getElementById('back-btn').style.display = 'none';
             document.getElementById('region-name').innerText = "Województwa";
-            map.setView([52.0, 19.0], 6);
+            map.setView([52.0, 19.0], 6.5);
         }
-        loadLayer(currentLevel, prev.filter);
+        loadData(currentLevel, last.filter);
     };
 
     // Legenda
-    const grades = [0, 7000, 8000, 9000, 10000, 12000];
+    const grades = [0, 7000, 8000, 9000, 10500, 12500];
     const legend = document.getElementById('legend');
+    legend.innerHTML = '<strong>Śr. cena za m²</strong><br>';
     grades.forEach((g, i) => {
         legend.innerHTML += `<i style="background:${getColor(g + 1)}"></i> ${g}${grades[i+1] ? '&ndash;'+grades[i+1] : '+'}<br>`;
     });
 
     // Start
-    loadLayer('woj');
+    loadData('woj');
 </script>
 </body>
 </html>
