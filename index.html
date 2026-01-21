@@ -3,165 +3,126 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mapa Cen Nieruchomości - Drilldown</title>
+    <title>Mapa Polski - Dynamiczny Drilldown</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        #map { height: 100vh; width: 100%; background: #f0f0f0; }
-        
-        #loader {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(255,255,255,0.9); padding: 20px; border-radius: 10px;
-            z-index: 2000; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.2);
-            text-align: center; font-weight: bold;
-        }
-
-        .info-box {
-            position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: white; padding: 15px; border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 250px;
-        }
-
-        #controls { position: absolute; top: 20px; left: 60px; z-index: 1000; }
-        button { 
-            padding: 10px 15px; cursor: pointer; background: #007bff; color: white; 
-            border: none; border-radius: 5px; font-weight: bold; transition: 0.3s;
-        }
-        button:hover { background: #0056b3; }
-        
-        .legend { 
-            background: white; padding: 10px; line-height: 18px; color: #333; 
-            border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.8; }
+        body { margin: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; background: #aad3df; }
+        .controls { position: absolute; top: 10px; left: 50px; z-index: 1000; }
+        button { padding: 10px; cursor: pointer; background: white; border: 1px solid #999; border-radius: 4px; font-weight: bold; }
+        .info { padding: 10px; background: rgba(255,255,255,0.9); border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+        #loader { display: none; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 2000; background: orange; color: white; padding: 10px 20px; border-radius: 20px; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<div id="loader">Pobieranie danych geograficznych...<br><small>To może potrwać kilka sekund (gminy są duże)</small></div>
-
-<div id="controls">
-    <button onclick="resetMap()">Wróć do Polski</button>
+<div id="loader">Ładowanie danych z Geoportalu...</div>
+<div id="controls" class="controls">
+    <button onclick="resetMap()">Powrót do Polski</button>
 </div>
-
-<div class="info-box" id="infoBox">
-    <strong>Kliknij w województwo</strong>, aby zobaczyć powiaty. Kliknij w powiat, aby zobaczyć gminy.
-</div>
-
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
     const map = L.map('map').setView([52.0, 19.1], 6);
-    let geojsonLayer;
-    let currentLevel = 'voivodeship';
+    let layerGroup = L.featureGroup().addTo(map);
+    let currentLevel = 'voivodeship'; // voivodeship -> county -> commune
 
-    // Dodanie mapy bazowej (opcjonalnie, dla kontekstu)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap'
-    }).addTo(map);
+    // Dodanie podkładu mapowego (jasne tło)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
 
+    // Funkcja generująca kolor na podstawie "ceny" (tutaj losowa dla przykładu)
     function getColor(d) {
-        return d > 12000 ? '#800026' :
-               d > 10000 ? '#BD0026' :
-               d > 8000  ? '#E31A1C' :
-               d > 7000  ? '#FC4E2A' :
-               d > 6000  ? '#FD8D3C' :
-               d > 5000  ? '#FEB24C' :
-               d > 4000  ? '#FED976' : '#FFEDA0';
+        return d > 8000 ? '#800026' : d > 6000 ? '#BD0026' : d > 5000 ? '#E31A1C' : 
+               d > 4000 ? '#FC4E2A' : d > 3000 ? '#FD8D3C' : '#FEB24C';
     }
 
-    // Wykrywanie kodu TERYT niezależnie od nazwy właściwości (kod/id/teryt)
-    function getFeatureCode(f) {
-        return f.properties.kod || f.properties.id || f.properties.teryt || f.properties.JPT_KOD_JE;
-    }
+    // --- LOGIKA POBIERANIA DANYCH ---
 
-    function getFeatureName(f) {
-        return f.properties.nazwa || f.properties.name || f.properties.JPT_NAZWA_E;
-    }
-
-    async function loadLayer(level, filterCode = '') {
-        const loader = document.getElementById('loader');
-        loader.style.display = 'block';
-        
-        if (geojsonLayer) map.removeLayer(geojsonLayer);
-        currentLevel = level;
-
+    // 1. Województwa i Powiaty ładujemy z małych plików (są lekkie)
+    async function loadStaticLayer(level, parentCode = '') {
+        showLoader(true);
         const urls = {
-            voivodeship: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/wojewodztwa/wojewodztwa-medium.geojson',
-            county: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/powiaty/powiaty-medium.geojson',
-            commune: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/gminy/gminy-medium.geojson'
+            voivodeship: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/wojewodztwa/wojewodztwa-low.geojson',
+            county: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/powiaty/powiaty-low.geojson'
         };
 
-        try {
-            const response = await fetch(urls[level]);
-            if (!response.ok) throw new Error('Błąd pobierania pliku');
-            const data = await response.json();
+        const res = await fetch(urls[level]);
+        let data = await res.json();
 
-            // Filtracja danych
-            if (filterCode) {
-                data.features = data.features.filter(f => {
-                    const code = getFeatureCode(f);
-                    return code && code.startsWith(filterCode);
+        if (parentCode) {
+            data.features = data.features.filter(f => f.properties.kod.startsWith(parentCode));
+        }
+
+        displayData(data, level);
+        showLoader(false);
+    }
+
+    // 2. Gminy ładujemy DYNAMICZNIE z serwerów rządowych (WFS) - tylko dla wybranego powiatu!
+    async function loadCommunesFromGeoportal(countyCode) {
+        showLoader(true);
+        
+        // Budujemy zapytanie WFS do Geoportalu (filtr po kodzie TERYT)
+        // Wykorzystujemy cql_filter, aby pobrać tylko gminy zaczynające się od kodu powiatu
+        const wfsUrl = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/PRG/WFS/AdministrativeBoundaries?service=WFS&version=2.0.0&request=GetFeature&typeNames=A03_Granice_gmin&outputFormat=application/json&cql_filter=text%20like%20'"+countyCode+"%'";
+
+        try {
+            const res = await fetch(wfsUrl);
+            const data = await res.json();
+            displayData(data, 'commune');
+        } catch (e) {
+            alert("Błąd pobierania danych z Geoportalu. Spróbuj ponownie.");
+        }
+        showLoader(false);
+    }
+
+    // --- WYŚWIETLANIE ---
+
+    function displayData(data, level) {
+        layerGroup.clearLayers();
+        currentLevel = level;
+
+        const geojson = L.geoJson(data, {
+            style: () => ({
+                fillColor: getColor(Math.floor(Math.random() * 9000)), // Tu wstawisz realne ceny
+                weight: 1, color: 'white', fillOpacity: 0.7
+            }),
+            onEachFeature: (feature, layer) => {
+                const props = feature.properties;
+                const name = props.nazwa || props.JPT_NAZWA_E || "Brak nazwy";
+                const code = props.kod || props.JPT_KOD_JE || "";
+
+                layer.bindPopup(`<b>${name}</b><br>Kod: ${code}`);
+
+                layer.on('click', (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    if (level === 'voivodeship') {
+                        loadStaticLayer('county', code);
+                    } else if (level === 'county') {
+                        loadCommunesFromGeoportal(code);
+                    }
+                    map.fitBounds(e.target.getBounds());
                 });
             }
+        }).addTo(layerGroup);
 
-            geojsonLayer = L.geoJson(data, {
-                style: (f) => ({
-                    fillColor: getColor(Math.floor(Math.random() * 8000 + 4000)), // Tu podepnij swoje dane
-                    weight: 1, opacity: 1, color: 'white', dashArray: '3', fillOpacity: 0.7
-                }),
-                onEachFeature: (feature, layer) => {
-                    const name = getFeatureName(feature);
-                    const code = getFeatureCode(feature);
-                    
-                    layer.bindPopup(`<b>${name}</b><br>Kod TERYT: ${code}`);
-                    
-                    layer.on({
-                        mouseover: (e) => e.target.setStyle({ fillOpacity: 0.9, weight: 2, color: '#666' }),
-                        mouseout: (e) => geojsonLayer.resetStyle(e.target),
-                        click: (e) => {
-                            L.DomEvent.stopPropagation(e);
-                            if (currentLevel === 'voivodeship') loadLayer('county', code);
-                            else if (currentLevel === 'county') loadLayer('commune', code);
-                            map.fitBounds(e.target.getBounds());
-                        }
-                    });
-                }
-            }).addTo(map);
-
-            if (filterCode) map.fitBounds(geojsonLayer.getBounds());
-            
-        } catch (err) {
-            console.error(err);
-            alert("Błąd ładowania poziomu: " + level + ". Sprawdź konsolę (F12).");
-        } finally {
-            loader.style.display = 'none';
+        if (level !== 'voivodeship') {
+            map.fitBounds(geojson.getBounds());
         }
     }
 
     function resetMap() {
         map.setView([52.0, 19.1], 6);
-        loadLayer('voivodeship');
+        loadStaticLayer('voivodeship');
     }
 
-    // Dodanie legendy
-    const legend = L.control({position: 'bottomright'});
-    legend.onAdd = function () {
-        const div = L.DomUtil.create('div', 'legend'),
-            grades = [0, 4000, 5000, 6000, 7000, 8000, 10000, 12000];
-        div.innerHTML = '<strong>Cena m²</strong><br>';
-        for (let i = 0; i < grades.length; i++) {
-            div.innerHTML += '<i style="background:' + getColor(grades[i] + 1) + '"></i> ' +
-                grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '<br>' : '+');
-        }
-        return div;
-    };
-    legend.addTo(map);
+    function showLoader(show) {
+        document.getElementById('loader').style.display = show ? 'block' : 'none';
+    }
 
     // Start
-    loadLayer('voivodeship');
-</script>
+    loadStaticLayer('voivodeship');
 
+</script>
 </body>
 </html>
