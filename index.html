@@ -3,36 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mapa Cen Nieruchomości w Polsce</title>
+    <title>Mapa Cen Nieruchomości - Drilldown</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; font-family: Arial, sans-serif; }
-        #map { height: 100vh; width: 100%; background: #f4f4f4; }
-        .info {
-            padding: 10px; background: white; background: rgba(255,255,255,0.9);
-            box-shadow: 0 0 15px rgba(0,0,0,0.2); border-radius: 5px; line-height: 24px;
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100vh; width: 100%; background: #f0f0f0; }
+        
+        #loader {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.9); padding: 20px; border-radius: 10px;
+            z-index: 2000; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.2);
+            text-align: center; font-weight: bold;
         }
-        .info h4 { margin: 0 0 5px; color: #777; }
-        .legend { line-height: 18px; color: #555; }
-        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
-        #controls { position: absolute; top: 10px; left: 50px; z-index: 1000; }
-        button { padding: 10px; cursor: pointer; background: white; border: 1px solid #ccc; font-weight: bold; }
+
+        .info-box {
+            position: absolute; top: 20px; right: 20px; z-index: 1000;
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 250px;
+        }
+
+        #controls { position: absolute; top: 20px; left: 60px; z-index: 1000; }
+        button { 
+            padding: 10px 15px; cursor: pointer; background: #007bff; color: white; 
+            border: none; border-radius: 5px; font-weight: bold; transition: 0.3s;
+        }
+        button:hover { background: #0056b3; }
+        
+        .legend { 
+            background: white; padding: 10px; line-height: 18px; color: #333; 
+            border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.8; }
     </style>
 </head>
 <body>
 
+<div id="loader">Pobieranie danych geograficznych...<br><small>To może potrwać kilka sekund (gminy są duże)</small></div>
+
 <div id="controls">
-    <button onclick="resetMap()">Powrót do Polski (Województwa)</button>
+    <button onclick="resetMap()">Wróć do Polski</button>
 </div>
+
+<div class="info-box" id="infoBox">
+    <strong>Kliknij w województwo</strong>, aby zobaczyć powiaty. Kliknij w powiat, aby zobaczyć gminy.
+</div>
+
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    const map = L.map('map').setView([52.0, 19.0], 6);
+    const map = L.map('map').setView([52.0, 19.1], 6);
     let geojsonLayer;
-    let currentLevel = 'voivodeship'; // voivodeship, county, commune
+    let currentLevel = 'voivodeship';
 
-    // Konfiguracja kolorów w zależności od ceny (zł/m2)
+    // Dodanie mapy bazowej (opcjonalnie, dla kontekstu)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
     function getColor(d) {
         return d > 12000 ? '#800026' :
                d > 10000 ? '#BD0026' :
@@ -40,58 +68,25 @@
                d > 7000  ? '#FC4E2A' :
                d > 6000  ? '#FD8D3C' :
                d > 5000  ? '#FEB24C' :
-               d > 4000  ? '#FED976' :
-                           '#FFEDA0';
+               d > 4000  ? '#FED976' : '#FFEDA0';
     }
 
-    // Funkcja symulująca dane cenowe (tutaj należy podpiąć realne dane)
-    function getPriceData(name, code) {
-        // Symulacja: Warszawa i duże miasta mają wyższe ceny
-        let base = 5000;
-        if (code && code.startsWith('14')) base += 4000; // Mazowieckie
-        if (code && code.length > 2) base += Math.random() * 2000; 
-        return Math.floor(base + (name.length * 100));
+    // Wykrywanie kodu TERYT niezależnie od nazwy właściwości (kod/id/teryt)
+    function getFeatureCode(f) {
+        return f.properties.kod || f.properties.id || f.properties.teryt || f.properties.JPT_KOD_JE;
     }
 
-    // Styl mapy
-    function style(feature) {
-        const price = getPriceData(feature.properties.nazwa, feature.properties.kod);
-        return {
-            fillColor: getColor(price),
-            weight: 2,
-            opacity: 1,
-            color: 'white',
-            dashArray: '3',
-            fillOpacity: 0.7
-        };
+    function getFeatureName(f) {
+        return f.properties.nazwa || f.properties.name || f.properties.JPT_NAZWA_E;
     }
 
-    // Interakcja: Hover i Kliknięcie
-    function onEachFeature(feature, layer) {
-        const price = getPriceData(feature.properties.nazwa, feature.properties.kod);
-        layer.bindPopup(`<strong>${feature.properties.nazwa}</strong><br>Średnia cena: ${price} zł/m²`);
-        
-        layer.on({
-            mouseover: (e) => { e.target.setStyle({ fillOpacity: 0.9, weight: 3 }); },
-            mouseout: (e) => { geojsonLayer.resetStyle(e.target); },
-            click: (e) => {
-                const code = feature.properties.kod;
-                if (currentLevel === 'voivodeship') {
-                    loadLayer('county', code);
-                } else if (currentLevel === 'county') {
-                    loadLayer('commune', code);
-                }
-                map.fitBounds(e.target.getBounds());
-            }
-        });
-    }
-
-    // Ładowanie warstw GeoJSON
     async function loadLayer(level, filterCode = '') {
+        const loader = document.getElementById('loader');
+        loader.style.display = 'block';
+        
         if (geojsonLayer) map.removeLayer(geojsonLayer);
         currentLevel = level;
 
-        // Adresy do repozytorium z GeoJSONami Polski (uproszczone)
         const urls = {
             voivodeship: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/wojewodztwa/wojewodztwa-medium.geojson',
             county: 'https://raw.githubusercontent.com/ppatrzyk/polska-geojson/master/powiaty/powiaty-medium.geojson',
@@ -100,46 +95,73 @@
 
         try {
             const response = await fetch(urls[level]);
-            let data = await response.json();
+            if (!response.ok) throw new Error('Błąd pobierania pliku');
+            const data = await response.json();
 
-            // Filtrowanie (jeśli kliknęliśmy województwo, pokaż tylko jego powiaty)
+            // Filtracja danych
             if (filterCode) {
-                data.features = data.features.filter(f => f.properties.kod.startsWith(filterCode));
+                data.features = data.features.filter(f => {
+                    const code = getFeatureCode(f);
+                    return code && code.startsWith(filterCode);
+                });
             }
 
             geojsonLayer = L.geoJson(data, {
-                style: style,
-                onEachFeature: onEachFeature
+                style: (f) => ({
+                    fillColor: getColor(Math.floor(Math.random() * 8000 + 4000)), // Tu podepnij swoje dane
+                    weight: 1, opacity: 1, color: 'white', dashArray: '3', fillOpacity: 0.7
+                }),
+                onEachFeature: (feature, layer) => {
+                    const name = getFeatureName(feature);
+                    const code = getFeatureCode(feature);
+                    
+                    layer.bindPopup(`<b>${name}</b><br>Kod TERYT: ${code}`);
+                    
+                    layer.on({
+                        mouseover: (e) => e.target.setStyle({ fillOpacity: 0.9, weight: 2, color: '#666' }),
+                        mouseout: (e) => geojsonLayer.resetStyle(e.target),
+                        click: (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            if (currentLevel === 'voivodeship') loadLayer('county', code);
+                            else if (currentLevel === 'county') loadLayer('commune', code);
+                            map.fitBounds(e.target.getBounds());
+                        }
+                    });
+                }
             }).addTo(map);
+
+            if (filterCode) map.fitBounds(geojsonLayer.getBounds());
+            
         } catch (err) {
-            console.error("Błąd ładowania mapy:", err);
-            alert("Nie udało się pobrać danych mapy.");
+            console.error(err);
+            alert("Błąd ładowania poziomu: " + level + ". Sprawdź konsolę (F12).");
+        } finally {
+            loader.style.display = 'none';
         }
     }
 
     function resetMap() {
-        map.setView([52.0, 19.0], 6);
+        map.setView([52.0, 19.1], 6);
         loadLayer('voivodeship');
     }
 
-    // Legenda
+    // Dodanie legendy
     const legend = L.control({position: 'bottomright'});
-    legend.onAdd = function (map) {
-        const div = L.DomUtil.create('div', 'info legend'),
+    legend.onAdd = function () {
+        const div = L.DomUtil.create('div', 'legend'),
             grades = [0, 4000, 5000, 6000, 7000, 8000, 10000, 12000];
-        div.innerHTML = '<h4>Cena m²</h4>';
+        div.innerHTML = '<strong>Cena m²</strong><br>';
         for (let i = 0; i < grades.length; i++) {
-            div.innerHTML +=
-                '<i style="background:' + getColor(grades[i] + 1) + '"></i> ' +
+            div.innerHTML += '<i style="background:' + getColor(grades[i] + 1) + '"></i> ' +
                 grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '<br>' : '+');
         }
         return div;
     };
     legend.addTo(map);
 
-    // Inicjalizacja
+    // Start
     loadLayer('voivodeship');
-
 </script>
+
 </body>
 </html>
